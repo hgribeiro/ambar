@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -26,7 +27,7 @@ import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from ultralytics import YOLO
 
 # ---------------------------------------------------------------------------
@@ -61,8 +62,32 @@ CONFIDENCE_THRESHOLD = 0.25
 # Maximum file size accepted (10 MB).
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
+# Maximum image pixel count (25 MP). Images whose decompressed size would
+# exceed this limit are rejected before they reach the model, protecting
+# the server against decompression-bomb attacks.
+MAX_IMAGE_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", "25000000"))
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
 # Allowed MIME types.
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/bmp"}
+
+# ---------------------------------------------------------------------------
+# Environment-driven configuration
+# ---------------------------------------------------------------------------
+
+# Path (or name) of the YOLOv8 weights file.
+# Override via MODEL_WEIGHTS env var to point at a local file or a different
+# variant (e.g. yolov8s.pt) without touching the source code.
+MODEL_WEIGHTS: str = os.getenv("MODEL_WEIGHTS", "yolov8n.pt")
+
+# Comma-separated list of allowed CORS origins.
+# Defaults to "*" for local development; restrict in production, e.g.:
+#   ALLOWED_ORIGINS=http://localhost:8501,https://myapp.example.com
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS: list[str] = (
+    ["*"] if _raw_origins.strip() == "*"
+    else [o.strip() for o in _raw_origins.split(",") if o.strip()]
+)
 
 # ---------------------------------------------------------------------------
 # Global model container
@@ -84,11 +109,13 @@ model_container = ModelContainer()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load the YOLOv8 model at startup and release it on shutdown."""
-    logger.info("Carregando modelo YOLOv8n …")
+    logger.info("Carregando modelo YOLOv8 (%s) …", MODEL_WEIGHTS)
     start = time.perf_counter()
-    # 'yolov8n.pt' is the nano variant – fast enough for a demo and downloads
-    # automatically on first run from the ultralytics CDN.
-    model_container.model = YOLO("yolov8n.pt")
+    # The weights path/name is read from the MODEL_WEIGHTS env var (default:
+    # "yolov8n.pt"). On first run the file is downloaded automatically; in
+    # offline environments set MODEL_WEIGHTS to the absolute path of a
+    # pre-downloaded file.
+    model_container.model = YOLO(MODEL_WEIGHTS)
     elapsed = time.perf_counter() - start
     logger.info("Modelo carregado em %.2f s", elapsed)
     yield
@@ -109,7 +136,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Restrict in production
+    # Origins are read from the ALLOWED_ORIGINS env var (default: "*").
+    # In production set ALLOWED_ORIGINS to a comma-separated list, e.g.:
+    #   ALLOWED_ORIGINS=http://localhost:8501,https://myapp.example.com
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -146,14 +176,46 @@ def decode_image(content: bytes) -> np.ndarray:
     Decode raw bytes into an OpenCV BGR image array.
 
     Raises:
-        HTTPException: if decoding fails (e.g. corrupted file).
+        HTTPException 413: if the image exceeds MAX_IMAGE_PIXELS (decompression
+            bomb protection).
+        HTTPException 422: if the bytes cannot be decoded as a valid image.
     """
     try:
-        pil_image = Image.open(io.BytesIO(content)).convert("RGB")
+        pil_image = Image.open(io.BytesIO(content))
+        # Image.open() is lazy — the header is read but pixel data is not yet
+        # decompressed. .size returns the declared dimensions without loading
+        # pixels, letting us enforce our limit before any decompression occurs.
+        width, height = pil_image.size
+        if width * height > MAX_IMAGE_PIXELS:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Imagem muito grande após descompressão. "
+                    f"O limite é {MAX_IMAGE_PIXELS:,} pixels."
+                ),
+            )
+        pil_image = pil_image.convert("RGB")
         # Convert PIL RGB → OpenCV BGR
         return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-    except Exception as exc:
+    except HTTPException:
+        raise  # propagate our own HTTP errors unchanged
+    except Image.DecompressionBombError as exc:
+        logger.warning("Imagem rejeitada por decompression bomb: %s", exc)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Imagem muito grande após descompressão. "
+                f"O limite é {MAX_IMAGE_PIXELS:,} pixels."
+            ),
+        ) from exc
+    except (UnidentifiedImageError, OSError, SyntaxError) as exc:
         logger.error("Falha ao decodificar imagem: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Não foi possível decodificar a imagem. Verifique se o arquivo não está corrompido.",
+        ) from exc
+    except Exception as exc:
+        logger.error("Erro inesperado ao decodificar imagem: %s", exc)
         raise HTTPException(
             status_code=422,
             detail="Não foi possível decodificar a imagem. Verifique se o arquivo não está corrompido.",
