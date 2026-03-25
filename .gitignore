@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# YOLOv8 model weights (downloaded at runtime)
+*.pt
+*.pth
+*.onnx
+
+# Ultralytics / YOLO run artifacts
+runs/
+
+# Streamlit cache
+.streamlit/
+
+# OS artefacts
+.DS_Store
+Thumbs.db

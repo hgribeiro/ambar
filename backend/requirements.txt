@@ -1,0 +1,10 @@
+# Backend dependencies
+# Install with: pip install -r requirements.txt
+
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.22
+ultralytics>=8.3.0
+opencv-python-headless==4.9.0.80
+Pillow==12.1.1
+numpy==1.26.4
