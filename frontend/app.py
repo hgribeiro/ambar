@@ -50,7 +50,7 @@ def check_backend_health() -> bool:
     try:
         response = requests.get(HEALTH_ENDPOINT, timeout=5)
         return response.status_code == 200 and response.json().get("status") == "ready"
-    except requests.RequestException:
+    except (requests.RequestException, ValueError):
         return False
 
 
