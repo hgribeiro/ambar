@@ -18,10 +18,8 @@ services:
     volumes:
       - model_cache:/root/.config/Ultralytics
     healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request, sys; \
-              try: r = urllib.request.urlopen('http://localhost:8000/health', timeout=5); sys.exit(0 if r.status == 200 else 1)\nexcept Exception: sys.exit(1)"]
-      interval: 30s
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
       timeout: 10s
       retries: 5
       start_period: 60s
