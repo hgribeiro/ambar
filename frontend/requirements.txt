@@ -3,4 +3,4 @@
 
 streamlit==1.35.0
 requests==2.32.2
-Pillow==12.1.1
+Pillow==10.4.0
