@@ -165,8 +165,13 @@ def render_input_section() -> tuple[bytes | None, str, str]:
 
 
 def render_original_preview(raw_bytes: bytes) -> None:
+    """Display the original uploaded image, converting to a PIL Image for compatibility."""
     st.subheader("📸 Imagem original")
-    st.image(raw_bytes, use_container_width=True)
+    try:
+        image = Image.open(io.BytesIO(raw_bytes))
+        st.image(image, use_column_width="always")
+    except Exception:
+        st.image(raw_bytes, use_column_width="always")
 
 
 def render_results(result: dict) -> None:
@@ -180,7 +185,7 @@ def render_results(result: dict) -> None:
     # Show annotated image (with bounding boxes).
     if annotated_b64:
         annotated_image = decode_base64_image(annotated_b64)
-        st.image(annotated_image, caption="Imagem anotada com bounding boxes", use_container_width=True)
+        st.image(annotated_image, caption="Imagem anotada com bounding boxes", use_column_width="always")
 
     if not vehicles_found:
         st.info(
